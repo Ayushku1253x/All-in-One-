@@ -8,7 +8,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:pdf/pdf.dart' show PdfPageFormat;
 import 'package:pdf/widgets.dart' as pw;
-import 'package:pdfrx/pdfrx.dart';
+import 'package:printing/printing.dart' show Printing;
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'util.dart';
 
@@ -78,24 +78,22 @@ Future<Uint8List> sfEdit(Uint8List b, String? pass, void Function(sf.PdfDocument
   return o;
 }
 
-Future<List<Uint8List>> pdfPages(String path, {String? pass, double scale = 2, int q = 88, List<int>? only}) async {
-  final doc = await PdfDocument.openFile(path, passwordProvider: pass == null ? null : () => pass);
+// Render every page to JPG bytes.
+Future<List<Uint8List>> pdfPages(String path, {String? pass, double scale = 2, int q = 88}) async {
+  var bytes = await File(path).readAsBytes();
+  if (pass != null) bytes = await sfBuild([(bytes, pass, null)]);
   final out = <Uint8List>[];
-  final idx = only ?? List.generate(doc.pages.length, (i) => i + 1);
-  for (final n in idx) {
-    if (n < 1 || n > doc.pages.length) continue;
-    final p = doc.pages[n - 1];
-    final r = await p.render(fullWidth: p.width * scale, fullHeight: p.height * scale);
-    if (r == null) continue;
+  await for (final r in Printing.raster(bytes, dpi: 72 * scale)) {
     final w = r.width, h = r.height;
     final px = Uint8List.fromList(r.pixels);
-    r.dispose();
     out.add(await Isolate.run(() {
-      final im = img.Image.fromBytes(width: w, height: h, bytes: px.buffer, order: img.ChannelOrder.bgra, numChannels: 4);
-      return Uint8List.fromList(img.encodeJpg(im, quality: q));
+      final im = img.Image.fromBytes(width: w, height: h, bytes: px.buffer, order: img.ChannelOrder.rgba, numChannels: 4);
+      final bg = img.Image(width: w, height: h);
+      img.fill(bg, color: img.ColorRgb8(255, 255, 255));
+      img.compositeImage(bg, im);
+      return Uint8List.fromList(img.encodeJpg(bg, quality: q));
     }));
   }
-  doc.dispose();
   return out;
 }
 
@@ -202,14 +200,14 @@ class _PdfPageState extends State<PdfPage> {
           break;
         case 'p2t':
           {
-            final doc = await PdfDocument.openFile(paths.first, passwordProvider: pw0 == null ? null : () => pw0!);
+            final d = sf.PdfDocument(inputBytes: first!, password: pw0);
+            final ex = sf.PdfTextExtractor(d);
             final sb = StringBuffer();
-            for (final p in doc.pages) {
-              final tx = await p.loadText();
-              sb.writeln(tx?.fullText ?? '');
-              sb.writeln('\n--- page ${p.pageNumber} ---\n');
+            for (var i = 0; i < d.pages.count; i++) {
+              sb.writeln(ex.extractText(startPageIndex: i, endPageIndex: i));
+              sb.writeln('\n--- page ${i + 1} ---\n');
             }
-            doc.dispose();
+            d.dispose();
             out = Uint8List.fromList(utf8.encode(sb.toString()));
             name = name.replaceAll('.pdf', '.txt');
             break;
@@ -266,7 +264,7 @@ class _PdfPageState extends State<PdfPage> {
         if (busy) const LinearProgressIndicator(),
         Text(status),
         const SizedBox(height: 16),
-        Text(keepsText ? 'Text select/copy hoga: pages original rehte hain.' : k == 'compress' ? 'Compress pages ko images banata hai (text select nahi hoga).' : k == 't2p' ? 'Hindi text ke liye: Text to Image banao, phir Image to PDF.' : '', style: const TextStyle(fontSize: 12)),
+        Text(keepsText ? 'Text select/copy hoga: pages original rehte hain.' : k == 'compress' ? 'Compress pages ko images banata hai (text select nahi hoga).' : k == 't2p' ? 'Hindi text ke liye: Text to Image banao, phir Image to PDF.' : k == 'p2t' ? 'Scanned ya Hindi PDF ke liye OCR PDF use karo.' : '', style: const TextStyle(fontSize: 12)),
       ]),
     );
   }
