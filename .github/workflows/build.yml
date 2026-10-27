@@ -26,8 +26,32 @@ jobs:
           for f in android/app/build.gradle android/app/build.gradle.kts; do
             if [ -f "$f" ]; then sed -i -E 's/minSdk(Version)? *=? *flutter\.minSdkVersion/minSdk = 24/' "$f"; fi
           done
+      - name: Gradle fixes
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/fix.gradle <<'EOF'
+          allprojects {
+            afterEvaluate { p ->
+              if (p.name != 'app' && p.hasProperty('android')) {
+                p.android.compileSdkVersion 36
+              }
+              if (p.name == 'app' && p.hasProperty('android')) {
+                p.dependencies.add('implementation', 'com.google.mlkit:text-recognition-devanagari:16.0.1')
+                def rel = p.android.buildTypes.getByName('release')
+                rel.minifyEnabled = false
+                rel.shrinkResources = false
+              }
+            }
+          }
+          EOF
       - run: flutter pub get
-      - run: flutter build apk --release --split-per-abi
+      - name: Build APK
+        run: |
+          set -o pipefail
+          flutter build apk --release --split-per-abi 2>&1 | tee build.log
+      - name: Show errors
+        if: failure()
+        run: grep -n -A6 -E "Error|error:|ERROR|What went wrong" build.log | head -150
       - uses: actions/upload-artifact@v4
         with:
           name: all-in-one-apk
